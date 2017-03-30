@@ -47,17 +47,19 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
  * Now it's only 317 scans/second, or about 3.15 msec/scan.
  * According to Cherry specs, debouncing time is 5 msec.
  *
- * And so, there is no sense to have DEBOUNCE higher than 2.
  */
 
 #ifndef DEBOUNCE
-#   define DEBOUNCE	5
+#   define DEBOUNCE	20
 #endif
-static uint8_t debouncing = DEBOUNCE;
 
 /* matrix state(1:on, 0:off) */
 static matrix_row_t matrix[MATRIX_ROWS];
+static matrix_row_t matrix_stage[MATRIX_ROWS];
 static matrix_row_t matrix_debouncing[MATRIX_ROWS];
+
+static uint16_t debouncing_time;
+static bool debouncing = false;
 
 static matrix_row_t read_cols(uint8_t row);
 static void init_cols(void);
@@ -114,6 +116,7 @@ void matrix_init(void)
     for (uint8_t i=0; i < MATRIX_ROWS; i++) {
         matrix[i] = 0;
         matrix_debouncing[i] = 0;
+        matrix_stage[i] = 0;
     }
 
 #ifdef DEBUG_MATRIX_SCAN_RATE
@@ -135,6 +138,7 @@ void matrix_power_up(void) {
     for (uint8_t i=0; i < MATRIX_ROWS; i++) {
         matrix[i] = 0;
         matrix_debouncing[i] = 0;
+        matrix_stage[i] = 0;
     }
 
 #ifdef DEBUG_MATRIX_SCAN_RATE
@@ -178,26 +182,24 @@ uint8_t matrix_scan(void)
     for (uint8_t i = 0; i < MATRIX_ROWS; i++) {
         select_row(i);
         wait_us(30);  // without this wait read unstable value.
-        matrix_row_t cols = read_cols(i);
-        if (matrix_debouncing[i] != cols) {
-            matrix_debouncing[i] = cols;
-            if (debouncing) {
-                debug("bounce!: "); debug_hex(debouncing); debug("\n");
-            }
-            debouncing = DEBOUNCE;
-        }
+        matrix_stage[i] = read_cols(i);
         unselect_rows();
     }
 
-    if (debouncing) {
-        if (--debouncing) {
-            wait_us(1);
-            // this should be wait_ms(1) but has been left as-is at EZ's request
-        } else {
-            for (uint8_t i = 0; i < MATRIX_ROWS; i++) {
-                matrix[i] = matrix_debouncing[i];
-            }
+    if (memcmp(matrix_debouncing, matrix_stage, sizeof(matrix)) != 0) {
+        debouncing = true;
+        debouncing_time = timer_read();
+    }
+
+    for (uint8_t i = 0; i < MATRIX_ROWS; i++) {
+        matrix_debouncing[i] = matrix_stage[i];
+    }
+
+    if (debouncing && (timer_elapsed(debouncing_time) > DEBOUNCE)) {
+        for (uint8_t i = 0; i < MATRIX_ROWS; i++) {
+            matrix[i] = matrix_debouncing[i];
         }
+        debouncing = false;
     }
 
     matrix_scan_quantum();
